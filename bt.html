@@ -1,0 +1,955 @@
+<! DOCTYPE HTML>
+<html>
+<head>
+
+<!-- <script src="/js/jquery-3.2.1.js" type="text/javascript" charset="utf-8"></script> -->
+<!-- <script src="/js/jsplumb.js" type="text/javascript" charset="utf-8"></script> -->
+
+<style type="text/css" id='css' rel="stylesheet">
+    #mainContainer{
+        width:600px;
+        margin:0 auto;
+        margin-top:10px;
+        border:1px double #000;
+        padding:3px;
+    }
+    .dragableBox{
+        width:100px;
+        height:30px;
+        border:1px solid #000;
+        background-color:#FFF;
+        margin-top:auto;
+        margin-bottom:auto;
+        vertical-align: center;
+        padding:4px;
+        font-weight:bold;
+        text-align:center;
+
+        /*不加这个就不能移动*/
+        position:absolute;
+    }
+    #menu{
+        border: 1px solid #000;
+        background-color: #999;
+    }
+    .option{
+        width: 100px;
+        height: 30px;
+        border: 0px;
+        margin-top:auto;
+        margin-bottom:auto;
+        vertical-align: center;
+        padding: 0px;
+        text-align: center;
+    }
+    img{
+        border:0px;
+    }
+</style>
+
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>行为树</title>
+
+</head>
+<body>
+
+
+<!-- <div id="fuck" class="dragableBox" style="left:1000px;top:100px; width:500px; height:300px;">
+    <div>
+        fuck you
+    </div>
+    <svg style="position: absolute;left:100px;top:0px" width="500" height="300">
+        <path d="M 0 300 Q 250 0 500 0" transform="translate(0.5,0.5)" fill="none" stroke="#89bcde"></path>
+    </svg>
+</div> -->
+
+
+<div id="mydiv">
+    <input type="color" id="color" name="user_color" />
+    <select onchange="console.log(this.value);">
+        <option value="fuck">Fuck</option>
+        <option value="you">You</option>
+    </select>
+</div>
+
+<div>
+读取接口文件
+<input type="file" id="interfacefile" name="file" accept=".lua" />
+
+<button type="button" style="visibility:hidden;" id="generateFile" onclick="download();">生成配置文件</button>
+&nbsp;&nbsp;&nbsp;&nbsp;
+读取配置文件
+<input type="file" id="configfile" name="file" accept=".lua" />
+<!-- <a href="/behaviorTree/experiment_bt.html">beta</a> -->
+</div>
+
+<output id="list"></output>
+
+
+<div id="root" nodeType='root' class="dragableBox" style="left:450px;top:240px;" onmousedown="down(event)" oncontextmenu="return false;">
+    root
+</div>
+
+<div id='menu' style="visibility: hidden; position: absolute; z-index:100;" oncontextmenu="return false;">
+    <div id='editComment'>
+        <a href="javascript:editComment(menu.target); showMenu(false);">edit</a>
+    </div>
+    <div id='cutNode'>
+        <a href="javascript:cutNode(menu.target); showMenu(false);">cut</a>
+    </div>
+    <div id='insertNode'>
+        <a href="javascript:insertNode(menu.target); showMenu(false);">insert</a>
+    </div>
+    <div id='deleteNode'>
+        <a href="javascript:deleteNode(menu.target); showMenu(false);">delete</a>
+    </div>
+</div>
+
+
+
+<script type="text/javascript">
+
+var color_selector = 'rgb(130, 25, 10)';
+var color_sequence = 'rgb(10, 150, 25)';
+var color_condition = 'rgb(90, 25, 87)';
+var color_action = 'rgb(25, 157, 125)';
+var re_condition = /^\s*function\s+Condition\.([a-zA-Z0-9_]+)\s*\(.*$/;
+var re_action = /^\s*function\s+Action\.([a-zA-Z0-9_]+)\s*\(.*$/;
+var config_gap = 50;
+
+var isDown = false;
+var initX = 0;
+var initY = 0;
+var initLeft = 0;
+var initTop = 0;
+var initZIndex = -1;
+var dragObj = false;
+var siblingArr = [];
+var objUp;
+var objDown;
+var waitInsert;
+var menu = document.getElementById('menu');
+
+var condition_functions = [];
+var action_functions = [];
+
+var metaObj = new Map();
+var targetMap = new Map();
+
+
+function addTarget(obj, func){
+    targetMap.set(obj, func);
+}
+
+function getColor(nodeType){
+    var color = 'rgb(250,0,0)';
+    if(nodeType=='selector'){
+        color = color_selector;
+    }
+    else if(nodeType=='sequence'){
+        color = color_sequence;
+    }
+    else if(nodeType=='condition'){
+        color = color_condition;
+    }
+    else if(nodeType=='action'){
+        color = color_action;
+    }
+    return color;
+}
+
+function isLeaf(nodeType){
+    return nodeType=='condition' || nodeType=='action';
+}
+
+function showMenu(show, target){
+    menu.style.visibility = show ? 'visible' : 'hidden';
+
+    var b = true;
+    if(target){
+        var t = target.getAttribute('nodeType');
+        b = isLeaf(t);
+    }
+
+    document.getElementById('editComment').hidden = b ? true : false;
+    document.getElementById('insertNode').hidden = (b || !waitInsert) ? true : false;
+}
+
+function addChildNode(parent, node){
+    parent.append(node);
+    var count = parent.getAttribute("leafCount");
+    if(!count) count = 0;
+    count = parseInt(count) + 1;
+    parent.setAttribute("leafCount", count);
+
+    if(count == 1)
+        return;
+
+    var p = parent.parentNode;
+    var nodeType = p.getAttribute("nodeType");
+    while(p.tagName == "DIV"){
+        var c = p.getAttribute("leafCount");
+        if(!c) c = 0;
+        c = parseInt(c) + 1;
+        p.setAttribute("leafCount", c);
+        p = p.parentNode;
+    }
+}
+
+function deleteNode(node){
+    if(node.getAttribute('isMetaType') == 'true')return;
+    if(node.getAttribute('nodeType') == 'root')return;
+    var parent = node.parentNode;
+    var count = parseInt(node.getAttribute('leafCount'));
+    if(count == 0)count = 1;
+    deleteLine(node);
+    node.remove();
+    var pcount = parseInt(parent.getAttribute('leafCount'));
+    parent.setAttribute('leafCount', pcount - count);
+    if(pcount - count == 0)count = count - 1;
+    adjustLeafCount(parent.parentNode, count);
+    adjustPostion(parent);
+
+    return node;
+}
+
+function cutNode(node){
+    waitInsert = deleteNode(node);
+}
+
+function insertNode(node){
+    if(!waitInsert)return;
+    var pcount = parseInt(node.getAttribute('leafCount'));
+    node.append(waitInsert);
+    var count = parseInt(waitInsert.getAttribute('leafCount'));
+    if(count == 0)count = 1;
+    node.setAttribute('leafCount', pcount + count);
+    if(pcount == 0) --count;
+    adjustLeafCount(node.parentNode, -count);
+    adjustPostion(node);
+    adjustLine(waitInsert);
+    waitInsert = null;
+}
+
+function getTextNode(node){
+    var type = node.getAttribute("nodeType");
+    if(!type || isLeaf(type))return;
+
+    var textNode;
+    for(var i=0; i < node.childNodes.length; ++i){
+        var ch = node.childNodes[i];
+        if(ch.constructor != Text)
+            continue;
+        textNode = ch;
+        break;
+    }
+
+    if(!textNode){
+        textNode = document.createTextNode("");
+        node.append(textNode);
+    }
+
+    return textNode;
+}
+
+function getComment(node){
+    var txtNode = getTextNode(node);
+    if(txtNode) return txtNode.data;
+}
+
+function setComment(node, data){
+    var txtNode = getTextNode(node)
+    if(txtNode) txtNode.data = data;
+}
+
+function editComment(node){
+    var txtNode = getTextNode(node);
+    if(!txtNode)return;
+
+    var data = prompt("input your comment", txtNode.data);
+    if(!data)return;
+
+    txtNode.data = data;
+}
+
+function adjustLeafCount(node, diff){
+    if(!node || node.tagName != "DIV") return;
+    if(diff == 0)return;
+
+    var count = parseInt(node.getAttribute('leafCount')) - diff;
+    if(count == 0) count = 1;
+    node.setAttribute('leafCount', count);
+    adjustLeafCount(node.parentNode, diff);
+}
+
+function adjustPostion(node){
+    if(node.tagName != "DIV")
+        return;
+
+    // 先调整子节点的位置
+    var totalLeafCount = parseInt(node.getAttribute("leafCount"));
+
+    var count = 0;
+    for(var i=0; i < node.childElementCount; ++i){
+        var ch = node.children[i];
+        if(ch.tagName != 'DIV') continue;
+
+        var gap = ch.offsetHeight + 2;
+        var initTop = node.offsetHeight/2 - totalLeafCount * gap / 2;
+
+        var c = ch.getAttribute("leafCount");
+        if(!c || parseInt(c) == 0) c = 1;
+        c = parseInt(c);
+
+        ch.style.top = initTop + gap * count + (c-1)*gap/2 + 'px';
+        adjustLine(ch);
+        count += c;
+    }
+
+    // 再递归
+    adjustPostion(node.parentNode);
+}
+
+function adjustLine(dragObj){
+    var p = dragObj.parentNode;
+    var type = p.getAttribute("nodeType");
+    if(!type || isLeaf(type))return;
+
+    if(!p.lines) p.lines = new Map();
+
+    var lines = p.lines;
+    var svg = lines.get(dragObj);
+
+    if(!svg){
+        var ns = 'http://www.w3.org/2000/svg';
+        svg = document.createElementNS(ns, 'svg');
+        svg.setAttributeNS(null, 'style', 'position: absolute;');
+        var path = document.createElementNS(ns, 'path');
+        path.setAttributeNS(null, 'transform', "translate(0.5, 0.5)");
+        path.setAttributeNS(null, 'fill', "none");
+        path.setAttributeNS(null, 'stroke', "#89bcde");
+        svg.append(path);
+        svg.path = path;
+        p.append(svg);
+        lines.set(dragObj, svg);
+    }
+
+    if(!svg)return;
+
+    var px = getPX(p);
+    var py = getPY(p);
+    var cx = getCX(dragObj);
+    var cy = getCY(dragObj);
+
+    var height = Math.abs(cy - py) + 4;
+    var width = Math.abs(cx - px) + 4;
+
+    svg.setAttributeNS(null, 'width', width);
+    svg.setAttributeNS(null, 'height', height);
+    var left = px < cx ? px : cx;
+    var top = py < cy ? py : cy;
+    var f = 0 + width;
+    var y = 0 + height;
+    svg.style.left = left-2;
+    svg.style.top = top;
+
+    var beginY = py > cy ? Math.abs(cy - py) : 0;
+    var endY = 0;
+    if(beginY == 0)endY = Math.abs(cy - py);
+    var endX = Math.abs(cx - px);
+    var d = "M 0 " + beginY + " Q " + Math.abs(cx - px)/2 + " " + endY + " " + endX + " " + endY;
+    svg.path.setAttributeNS(null, 'd', d);
+}
+
+function deleteLine(node){
+    var p = node.parentNode;
+    var type = p.getAttribute("nodeType");
+    if(!type || isLeaf(type))return;
+
+    if(!p.lines)return;
+
+    var lines = p.lines;
+    var svg = lines.get(node);
+    if(!svg)return;
+    lines.delete(node);
+    svg.remove();
+}
+
+function onDragDrop(tarObj, dragObj, e, func_name, comment){
+    if(tarObj == dragObj)return;
+    if(tarObj.getAttribute('nodeType') == 'root' && tarObj.childElementCount > 0)return;
+
+    var nodeName = dragObj.getAttribute('nodeName');
+    var nodeType = dragObj.getAttribute('nodeType');
+
+    var leaf = isLeaf(nodeType);
+    var color = getColor(nodeType);
+
+    if(!e.shiftKey && isLeaf(tarObj.getAttribute('nodeType')))return;
+
+    if(leaf)
+        if(condition_functions.length < 1 || action_functions.length < 1){
+            alert("condition or action is empty!\nLoad the file first!");
+            document.getElementById("configfile").value="";
+            return;
+        }
+
+    var div = document.createElement('div');
+    div.className = 'dragableBox';
+    div.setAttribute('leafCount', 0);
+    div.setAttribute('nodeType', nodeType);
+    div.style.left = tarObj.offsetWidth + config_gap;
+    div.style.top = tarObj.offsetHeight / 2 - 52/2;
+    div.style.color = color;
+    div.onmousedown = down;
+
+    if(e.shiftKey){
+        div = tarObj;
+        if(div.getAttribute('nodeType') == nodeType)
+            return;
+
+        var rm = [];
+        for(var i=0; i < div.childElementCount; ++i){
+            var ch = div.children[i];
+            // console.log(ch.tagName);
+            if(leaf || ch.tagName == 'SELECT'){
+                rm.push(ch);
+            }
+        }
+        for(var i=0; i < rm.length; ++i)
+            rm[i].remove();
+
+        if(leaf){
+            var old = div.getAttribute('leafCount');
+            if(old > 1)
+                adjustLeafCount(div.parentNode, old - 1);
+            div.setAttribute('leafCount', 0);
+        }
+
+        div.setAttribute('nodeType', nodeType);
+        div.style.color = color;
+    }
+
+    if(leaf){
+        var select = document.createElement('select');
+        select.className = "option";
+
+        var arr = new Array();
+        if(nodeType == 'condition')
+            arr = condition_functions;
+        else if(nodeType == 'action')
+            arr = action_functions;
+
+        for(var x in arr){
+            var opt = document.createElement('option');
+            opt.value = arr[x];
+            opt.text = arr[x];
+            select.append(opt);
+        }
+        if(func_name)
+            select.value = func_name;
+        select.style.color = color;
+        div.append(select);
+    }
+
+    if(!e.shiftKey){
+        addChildNode(tarObj, div);
+    }
+    adjustPostion(tarObj);
+
+    if(comment)
+        setComment(div, comment);
+    else
+        setComment(div, nodeType);
+
+    addTarget(div, onDragDrop);
+
+    adjustLine(div);
+
+    return div;
+}
+
+
+
+function cancelSelectionEvent(e){
+    if(document.all)e = event;
+
+    if (e.target) source = e.target;
+        else if (e.srcElement) source = e.srcElement;
+        if (source.nodeType == 3) // defeat Safari bug
+            source = source.parentNode;
+    if(source.tagName.toLowerCase()=='input')return true;
+
+    if(isDown)return false; else return true;
+}
+
+function cancelEvent(){
+    return false;
+}
+
+function canChangeColor(obj){
+    var nodeType = obj.getAttribute('nodeType');
+    if(nodeType == 'root' && obj.childElementCount > 0) return false;
+    if(isLeaf(nodeType)) return false;
+    return true;
+}
+
+function colorChange(clientX, clientY, color){
+    for(var x of targetMap){
+        var obj = x[0];
+        var func = x[1];
+
+        // 判断当前坐标是否落在 obj 所在区域
+        var x = clientX;
+        var y = clientY;
+        // obj.offsetLeft; // offsetXXX 是相对于父节点的坐标参数, 这里跟 clientX 比较, 要转换到相同的坐标系
+        var rect = obj.getBoundingClientRect();
+        if(canChangeColor(obj) && x > rect.left && x < rect.right && y > rect.top && y < rect.bottom){
+            obj.style.backgroundColor = color;
+        }else{
+            obj.style.backgroundColor = '';
+        }
+    }
+}
+
+function down(e){
+    // 区分左右键
+    // console.log(e);
+    showMenu(false);
+
+    var tar = e.target;
+
+    if(e.button == 2){
+        if(tar.getAttribute('isMetaType') == 'true')return;
+        if(tar.getAttribute('nodeType') == 'root')return;
+        if(tar.tagName == 'SELECT') tar = tar.parentNode;
+        // 右键
+        showMenu(true, tar);
+        menu.style.left = e.clientX;
+        menu.style.top = e.clientY;
+        menu.target = tar;
+        return;
+    }
+
+    if(e.target.tagName == 'svg')return;
+
+    if(isDown)
+        return;
+    isDown = true;
+
+    dragObj = e.target;
+    if(dragObj.tagName == 'SELECT') dragObj = dragObj.parentNode;
+    if(e.ctrlKey && dragObj.getAttribute('isMetaType') != 'true'){
+        dragObj = document.getElementById('root');
+        // console.log(dragObj);
+    }
+
+    initZIndex = dragObj.style.zIndex;
+    dragObj.style.zIndex = 100;
+
+    initX = e.clientX;
+    initY = e.clientY;
+    initLeft = parseInt(dragObj.style.left);
+    initTop = parseInt(dragObj.style.top);
+
+    siblingArr = [];
+    objUp = null;
+    objDown = null;
+
+    var p = dragObj.parentNode;
+    if(p && p.tagName == 'DIV'){
+        for(var i=0; i < p.childElementCount; ++i){
+            var ch = p.children[i];
+            if(ch != dragObj && ch.tagName == 'DIV')
+                siblingArr.push(p.children[i]);
+        }
+    }
+}
+
+function getPX(div){
+    return parseInt(div.offsetWidth);
+}
+
+function getPY(div){
+    return parseInt(div.offsetHeight) / 2;
+}
+
+function getCX(div){
+    return parseInt(div.style.left);
+}
+
+function getCY(div){
+    return parseInt(div.style.top) + parseInt(div.offsetHeight) / 2;
+}
+
+function move(e){
+    if(!isDown)
+        return;
+
+    dragObj.style.left = e.clientX - initX + initLeft;
+    dragObj.style.top = e.clientY - initY + initTop;
+
+    if(dragObj.getAttribute('nodeType') == 'root') return;
+
+    // 可插入就变色
+    if (dragObj.getAttribute('isMetaType') == 'true')
+        colorChange(e.clientX, e.clientY, '#ff0');
+
+    objUp = null;
+    objDown = null;
+    var dragRect = dragObj.getBoundingClientRect();
+    for(var i=0; i < siblingArr.length; ++i){
+        var sib = siblingArr[i];
+        var sibRect = sib.getBoundingClientRect();
+        if(dragRect.right < sibRect.left || dragRect.left > sibRect.right){
+            break;
+        }
+
+        if(sibRect.top < dragRect.top){
+            if(!objUp)
+                objUp = sib;
+            else{
+                var objRect = objUp.getBoundingClientRect();
+                if(sibRect.top > objRect.top)
+                    objUp = sib;
+            }
+        }
+
+        if(sibRect.bottom > dragRect.bottom){
+            if(!objDown)
+                objDown = sib;
+            else{
+                var objRect = objDown.getBoundingClientRect();
+                if(sibRect.bottom < objRect.bottom)
+                    objDown = sib;
+            }
+        }
+    }
+
+    for(var i=0; i < siblingArr.length; ++i){
+        var sib = siblingArr[i];
+        if(sib != objUp && sib != objDown)
+            sib.style.background = '';
+    }
+
+    if(objUp)objUp.style.background = 'linear-gradient(blue, white)';
+    if(objDown)objDown.style.background = 'linear-gradient(white, blue)';
+
+    if (dragObj.getAttribute('isMetaType') == 'true' || dragObj.tagName != 'DIV')
+        return;
+
+    adjustLine(dragObj);
+}
+
+function stopmove(e){
+    if(!isDown)
+        return;
+
+    isDown = false;
+
+    // console.log(e.target);
+    // console.log(dragObj);
+
+    if (dragObj.getAttribute('isMetaType') == 'true'){
+        for(var x of targetMap){
+            var obj = x[0];
+            var func = x[1];
+
+            // 判断当前坐标是否落在 obj 所在区域
+            var x = e.clientX;
+            var y = e.clientY;
+            // obj.offsetLeft; // offsetXXX 是相对于父节点的坐标参数, 这里跟 clientX 比较, 要转换到相同的坐标系
+            var rect = obj.getBoundingClientRect();
+            if(x > rect.left && x < rect.right && y > rect.top && y < rect.bottom){
+                func(obj, dragObj, e);
+                break;
+            }
+        }
+    }
+
+    var nodeType = dragObj.getAttribute('nodeType');
+    if(nodeType == 'root')
+        return;
+
+    dragObj.style.left = initLeft;
+    dragObj.style.top = initTop;
+    dragObj.style.zIndex = initZIndex;
+
+    colorChange(0, 0, '');
+
+    if(objUp)objUp.style.background = '';
+    if(objDown)objDown.style.background = '';
+
+    if(objDown){
+        objDown.parentNode.insertBefore(dragObj, objDown);
+        adjustPostion(objDown.parentNode);
+    }else if(objUp){
+        objUp.parentNode.append(dragObj);
+        adjustPostion(objUp.parentNode);
+    }
+
+    adjustLine(dragObj);
+}
+
+function handleInterface(evt){
+    handleFileSelect(evt, "interface");
+}
+function handleConfig(evt){
+    handleFileSelect(evt, "config");
+}
+
+function handleFileSelect(evt, type){
+
+    var file = evt.target.files[0];
+    if(!file) return;
+
+    var ext = file.name.split('.').pop();
+    if(ext != 'lua' && ext != 'json'){
+        alert("file type not accepted! only accept lua or json");
+        document.getElementById("interfacefile").value = "";
+        return;
+    }
+    var fr = new FileReader();
+    fr.onload = function(e){
+        var txt = e.target.result;
+
+        if(type == 'interface'){
+            condition_functions = [];
+            action_functions = [];
+            var arr = txt.split("\n");
+
+            for(i in arr){
+                var extract = re_condition.exec(arr[i]);
+                if(extract){
+                    condition_functions.push(extract[1]);
+                }
+                extract = re_action.exec(arr[i]);
+                if(extract){
+                    action_functions.push(extract[1]);
+                }
+            }
+            if(condition_functions.length == 0 || action_functions.length == 0){
+                alert("there is no condition or action!\nmayble you load the wrong file!");
+                document.getElementById("interfacefile").value = "";
+                return;
+            }
+        }else if(type == 'config'){
+            var obj;
+            if(ext == 'json')
+                obj = JSON.parse(txt);
+            else{
+                var arr = txt.split("\n");
+                if(!arr || !arr[1]){
+                    alert("invalid config file!");
+                    return;
+                }
+                try{
+                    obj = JSON.parse(arr[1]);
+                }catch(ex) {
+                    alert(ex);
+                    return;
+                }
+            }
+            var r = document.getElementById('root');
+            r.innerText = 'root';
+            r.setAttribute('leafCount', 0);
+            if(!obj2Node(r, obj)) r.innerText = 'root';
+        }
+    }
+    fr.readAsText(file);
+}
+
+function obj2Node(parent, obj){
+    if(isLeaf(obj.nodeType)){
+        var div = onDragDrop(parent, metaObj.get(obj.nodeType), {shiftKey:false}, obj.func);
+        if(!div) return;
+        return true;
+    }else{
+        var div = onDragDrop(parent, metaObj.get(obj.nodeType), {shiftKey:false}, null, obj.comment);
+        if(!div) return;
+        for(var i=0; i < obj.arr.length; ++i){
+            var ch = obj.arr[i];
+            if(!obj2Node(div, ch)) return;
+        }
+        return true;
+    }
+}
+
+function node2Obj(node){
+    var obj = {}
+    obj.nodeType = node.getAttribute('nodeType');
+    if(isLeaf(obj.nodeType)){
+        for(var i=0; i < node.childElementCount; ++i){
+            var child = node.children[i];
+            if(child.tagName == 'SELECT'){
+                obj.func = child.value;
+                return obj;
+            }
+        }
+    }else{
+        obj.arr = [];
+        obj.comment = getComment(node);
+    }
+    var count = 0;
+    for(var i=0; i < node.childElementCount; ++i){
+        var child = node.children[i];
+        if(child.tagName != 'DIV') continue;
+        var nodeType = child.getAttribute('nodeType');
+        if(!nodeType){
+            continue;
+        }
+        obj.arr[count++] = node2Obj(child);
+    }
+    return obj;
+}
+
+function obj2Lua(obj){
+    var str = "{";
+
+    var type = obj.nodeType;
+    str += "nodeType='" + type + "',"
+    if(isLeaf(type)){
+        str += "func='" + obj.func + "',"
+    }else{
+        str += "comment='" + obj.comment + "',";
+        str += "arr={";
+        for(var i=0; i < obj.arr.length; ++i){
+            str += obj2Lua(obj.arr[i]) + ",";
+        }
+        str += "},"
+    }
+
+    return str + "}"
+}
+
+function download(){
+    var list = document.getElementById('list');
+    list.innerHTML = "";
+    var firstChild = null;
+    var root = document.getElementById('root');
+    for(var i=0; i < root.childElementCount; ++i){
+        var ch = root.children[i];
+        if(ch.tagName != 'DIV')continue;
+        var t = ch.getAttribute('nodeType');
+        if(!t)continue;
+        firstChild = ch;
+    }
+    if(!firstChild){
+        alert("your tree is empty now!");
+        return;
+    }
+    var obj = node2Obj(firstChild);
+    var data = "--[[\n";
+    data += JSON.stringify(obj); // JSON.parse('{}');
+    data += '\n]]\nreturn\n' + obj2Lua(obj);
+
+    var span = document.createElement('span');
+    span.style.visibility = 'hidden';
+    span.innerHTML = ['<a download="bt_logic.', "lua", '"', ' href="data:text/plain,', encodeURI(data), '">Download</a>'].join('');
+    list.insertBefore(span, null);
+    var a = span.getElementsByTagName('a')[0];
+    a.click();
+}
+
+var txtFile = new XMLHttpRequest();
+txtFile.open("GET", "hangj.lua", true);
+txtFile.onreadystatechange = function() {
+    if (txtFile.readyState === 4) {  // Makes sure the document is ready to parse.
+        if (txtFile.status === 200) {  // Makes sure it's found the file.
+            var allText = txtFile.responseText;
+            var lines = txtFile.responseText.split("\n"); // Will separate each line into an array
+            document.getElementById("mydiv").innerHTML = allText;
+        }
+    }
+}
+// txtFile.send();
+
+function setCookie(name, value, expireday){
+    var exp = new Date();
+    exp.setTime(exp.getTime() + expireday*24*60*60*1000);
+    document.cookie = name + "=" + escape(value) + "; expires=" + exp.toUTCString();
+}
+
+function getCookie(name){
+    var cookie = document.cookie;
+    if(cookie.length == 0)return;
+
+    var reg = new RegExp("(^| )" + name + "=([^;]*)(;|$)");
+    var arr = cookie.match(reg);
+    if(arr) return unescape(arr[2]);
+}
+
+function setBodyColor(color){
+    if(!color) color = '#c7edcc';   // default color
+    setCookie('bodycolor', color, 365);
+    document.getElementsByTagName('body')[0].bgColor = color;
+    document.getElementById('color').value = color;
+}
+
+function init(){
+    document.getElementById("interfacefile").addEventListener('change', handleInterface, false);
+    document.getElementById("configfile").addEventListener('change', handleConfig, false);
+    document.getElementById('color').addEventListener('change', function(e){setBodyColor(this.value);}, false);
+    var color = getCookie('bodycolor');
+    setBodyColor(color);
+
+    // 计算出 div 的间距  从 css 中取到 height, padding, border
+    var div = document.createElement('div');
+    div.className = 'dragableBox';
+    div.id = 'getPropertyValueFromCSS';
+    div.style.visibility = 'hidden';
+    document.body.append(div);
+    // var style = window.getComputedStyle(div);
+    // var height = parseInt(style.getPropertyValue('height'));
+    // var padding = parseInt(style.getPropertyValue('padding'));
+    // var border = parseInt(style.getPropertyValue('border'));
+    var offsetHeight = div.offsetHeight;    // height + 2*padding + 2*border
+
+    document.body.removeChild(document.getElementById('getPropertyValueFromCSS'));
+
+    var node_types = ['selector', 'sequence', 'condition', 'action'];
+    var j=0;
+    for(i in node_types){
+        // console.log(node_types[i]);
+        var div = document.createElement('div');
+        div.className = 'dragableBox';
+        div.style.left = '20px';
+        div.style.color = getColor(node_types[i]);
+        div.style.top = 60 + j*(offsetHeight + 4) + 'px';
+        div.innerText = node_types[i];
+        div.setAttribute('nodeName', node_types[i]);
+        div.setAttribute('nodeType', node_types[i]);
+        div.setAttribute('isMetaType', 'true');
+        div.onmousedown = down;
+        div.oncontextmenu = function(){return false;}
+        metaObj.set(node_types[i], div);
+
+        j++;
+
+        document.body.append(div);
+    }
+
+    document.body.onmousemove = move;
+    document.body.onmouseup = stopmove;
+    document.body.oncontextmenu = function(){return false;};
+
+    document.body.onselectstart = cancelSelectionEvent;
+    document.body.ondragstart = cancelEvent;
+
+    var obj = document.getElementById('root');
+    addTarget(obj, onDragDrop);
+
+    window.onkeydown = function(e){
+        if(e.ctrlKey && (e.key == 's' || e.key == 'S')){
+            document.getElementById("generateFile").click();
+            return false;
+        }
+    }
+}
+
+window.onload = init;
+
+</script>
+
+</body>
+</html>
