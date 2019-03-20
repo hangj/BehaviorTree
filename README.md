@@ -7,4 +7,4 @@
 
 bt.lua 用来驱动整棵行为树
 
-hangj.me/bt.html
+https://hangj.github.io/BehaviorTree/bt.html
