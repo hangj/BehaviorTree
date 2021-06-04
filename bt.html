@@ -327,7 +327,7 @@ function adjustLine(dragObj){
         var path = document.createElementNS(ns, 'path');
         path.setAttributeNS(null, 'transform', "translate(0.5, 0.5)");
         path.setAttributeNS(null, 'fill', "none");
-        path.setAttributeNS(null, 'stroke', "#89bcde");
+        path.setAttributeNS(null, 'stroke', getComplementaryColor(document.body.bgColor));
         svg.append(path);
         svg.path = path;
         p.append(svg);
@@ -882,14 +882,33 @@ function getCookie(name){
 function setBodyColor(color){
     if(!color) color = '#c7edcc';   // default color
     setCookie('bodycolor', color, 365);
-    document.getElementsByTagName('body')[0].bgColor = color;
+    document.body.bgColor = color;
     document.getElementById('color').value = color;
+}
+
+// 计算互补色
+function getComplementaryColor(color){
+    color = color.toString()
+    if(color.startsWith('#')) color = color.substring(1)
+    let [r,g,b] = color.match(/.{2}/g).map(x=>parseInt(x, 16))
+    let added = Math.max(r,g,b) + Math.min(r,g,b)
+    return [r,g,b].map(x=>added-x).map(x=>{x=Number(x).toString(16);return(x.length==1)? '0'+x:x}).reduce((a,b)=>a+b, '#')
 }
 
 function init(){
     document.getElementById("interfacefile").addEventListener('change', handleInterface, false);
     document.getElementById("configfile").addEventListener('change', handleConfig, false);
-    document.getElementById('color').addEventListener('change', function(e){setBodyColor(this.value);}, false);
+    document.getElementById('color').addEventListener('change', function(e){
+        setBodyColor(this.value);
+        let paths = document.getElementsByTagName('path')
+        console.log('%ccolor', `color:${this.value}`, this.value)
+
+        let color = getComplementaryColor(this.value)
+
+        for(let p of paths){
+            p.setAttributeNS(null, 'stroke', color)
+        }
+    }, false);
     var color = getCookie('bodycolor');
     setBodyColor(color);
 
